@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hand Tracker</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap');
+  :root { --c:#00f5ff; --g:#00ff88; --p:#ff2d78; --y:#ffe040; --bg:#04080f; }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--c);font-family:'Share Tech Mono',monospace;height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+  body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,245,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,245,255,0.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;}
+  #hdr{position:fixed;top:0;left:0;right:0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;background:rgba(4,8,15,0.9);border-bottom:1px solid rgba(0,245,255,0.15);z-index:10;backdrop-filter:blur(8px);}
+  #hdr h1{font-family:'Orbitron',sans-serif;font-size:0.8rem;letter-spacing:0.2em;text-shadow:0 0 12px var(--c);}
+  #st{font-size:0.65rem;letter-spacing:0.1em;color:var(--g);display:flex;align-items:center;gap:6px;}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.4;transform:scale(0.7);}}
+  #wrap{position:relative;width:min(95vw,560px);aspect-ratio:4/3;border:1px solid rgba(0,245,255,0.2);border-radius:4px;overflow:hidden;box-shadow:0 0 40px rgba(0,245,255,0.05);}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:0.88;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1);}
+  #ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;z-index:5;text-align:center;padding:20px;transition:opacity 0.4s;}
+  .big{font-family:'Orbitron',sans-serif;font-size:clamp(0.9rem,3vw,1.3rem);text-shadow:0 0 20px var(--c);letter-spacing:0.12em;}
+  .sm{font-size:0.68rem;color:rgba(0,245,255,0.45);letter-spacing:0.06em;}
+  #btn{margin-top:8px;padding:10px 26px;background:transparent;border:1px solid var(--c);color:var(--c);font-family:'Orbitron',sans-serif;font-size:0.7rem;letter-spacing:0.2em;cursor:pointer;transition:all 0.2s;box-shadow:0 0 12px rgba(0,245,255,0.15);}
+  #btn:hover,#btn:active{background:rgba(0,245,255,0.1);box-shadow:0 0 24px rgba(0,245,255,0.35);}
+  #foot{position:fixed;bottom:0;left:0;right:0;padding:8px 20px;display:flex;justify-content:space-between;font-size:0.6rem;letter-spacing:0.07em;color:rgba(0,245,255,0.3);background:rgba(4,8,15,0.9);border-top:1px solid rgba(0,245,255,0.08);z-index:10;}
+  #hc{color:var(--y);text-shadow:0 0 8px var(--y);}
+  #lb{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--c),var(--g));box-shadow:0 0 8px var(--c);transition:width 0.3s;z-index:100;}
+</style>
+</head>
+<body>
+<div id="lb" style="width:0%"></div>
+<div id="hdr"><h1>⬡ HAND·TRACK·SYS</h1><div id="st"><div class="dot"></div><span id="stxt">READY</span></div></div>
+<div id="wrap">
+  <video id="vid" autoplay muted playsinline></video>
+  <canvas id="cv"></canvas>
+  <div id="ov">
+    <div class="big">HAND SKELETON</div>
+    <div class="big">VISUALIZER</div>
+    <div class="sm">21 landmarks · Real-time · 2 hands</div>
+    <button id="btn" onclick="go()">ENABLE CAMERA</button>
+  </div>
+</div>
+<div id="foot"><span>LANDMARKS: 21</span><span>HANDS: <span id="hc">—</span></span><span>REAL-TIME</span></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script>
+const vid=document.getElementById('vid'),cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const ov=document.getElementById('ov'),stxt=document.getElementById('stxt'),hc=document.getElementById('hc'),lb=document.getElementById('lb');
+const FC={thumb:'#ff2d78',index:'#00f5ff',middle:'#00ff88',ring:'#ffe040',pinky:'#bf5fff',palm:'rgba(0,245,255,0.5)'};
+const CONN={thumb:[[0,1],[1,2],[2,3],[3,4]],index:[[0,5],[5,6],[6,7],[7,8]],middle:[[0,9],[9,10],[10,11],[11,12]],ring:[[0,13],[13,14],[14,15],[15,16]],pinky:[[0,17],[17,18],[18,19],[19,20]],palm:[[5,9],[9,13],[13,17]]};
+const TIPS=[4,8,12,16,20];
+let frame=0;
+
+function line(x1,y1,x2,y2,c,w=1.8,g=10){ctx.save();ctx.shadowColor=c;ctx.shadowBlur=g;ctx.strokeStyle=c;ctx.lineWidth=w;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore();}
+function dot(x,y,c,r=4,g=16){ctx.save();ctx.shadowColor=c;ctx.shadowBlur=g;ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.beginPath();ctx.arc(x,y,r*0.45,0,Math.PI*2);ctx.fill();ctx.restore();}
+function px(lm){return{x:lm.x*cv.width,y:lm.y*cv.height};}
+
+function drawHand(lms){
+  ['thumb','index','middle','ring','pinky','palm'].forEach(n=>{
+    const c=FC[n];
+    CONN[n].forEach(([a,b])=>{const p1=px(lms[a]),p2=px(lms[b]);line(p1.x,p1.y,p2.x,p2.y,c);});
+  });
+  lms.forEach((lm,i)=>{
+    const {x,y}=px(lm);
+    const isTip=TIPS.includes(i);
+    let c=FC.palm;
+    if(i>=1&&i<=4)c=FC.thumb;else if(i>=5&&i<=8)c=FC.index;else if(i>=9&&i<=12)c=FC.middle;else if(i>=13&&i<=16)c=FC.ring;else if(i>=17&&i<=20)c=FC.pinky;
+    dot(x,y,c,isTip?6:i===0?7:4,isTip?24:14);
+    if(isTip){const p=(Math.sin(frame*0.08+i)+1)/2;ctx.save();ctx.strokeStyle=c;ctx.lineWidth=1;ctx.globalAlpha=p*0.5;ctx.shadowColor=c;ctx.shadowBlur=12;ctx.beginPath();ctx.arc(x,y,11+p*4,0,Math.PI*2);ctx.stroke();ctx.restore();}
+  });
+}
+
+function onResults(res){
+  cv.width=vid.videoWidth||640;cv.height=vid.videoHeight||480;
+  ctx.clearRect(0,0,cv.width,cv.height);frame++;
+  const n=res.multiHandLandmarks?.length||0;
+  hc.textContent=n||'—';
+  if(n>0)res.multiHandLandmarks.forEach(l=>drawHand(l));
+}
+
+async function go(){
+  ov.style.opacity='0';stxt.textContent='CAMERA...';lb.style.width='20%';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+    // Try front camera on mobile
+    vid.srcObject=stream;
+    await new Promise(r=>vid.onloadedmetadata=r);
+    stxt.textContent='LOADING MODEL';lb.style.width='50%';
+    const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+    hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:0.65,minTrackingConfidence:0.55});
+    hands.onResults(onResults);
+    lb.style.width='80%';
+    const camera=new Camera(vid,{onFrame:async()=>await hands.send({image:vid}),width:640,height:480});
+    camera.start();
+    lb.style.width='100%';stxt.textContent='TRACKING';ov.style.display='none';
+    setTimeout(()=>lb.style.opacity='0',800);
+  }catch(e){
+    stxt.textContent='ERROR';ov.style.opacity='1';
+    ov.innerHTML=`<div class="big" style="color:#ff2d78">CAMERA DENIED</div><div class="sm">Allow camera access<br>and reload the page</div>`;
+    console.error(e);
+  }
+}
+</script>
+</body>
+</html>
